@@ -235,26 +235,59 @@ if menu == "Screening Dashboard":
                 st.subheader("TIER 1.5 — Acoustic Biomarker Validation")
                 st.caption("Librosa MFCC extraction | Jitter & Shimmer analysis | Triggered by High Risk gate")
 
-                audio_input = st.audio_input("Record Voice Sample (Processed Locally — Not Stored)")
+                st.info('**Please read the following text out loud:**\n\n*"I am participating in this cognitive assessment today. The weather outside is calm, and I am trying to focus on my daily routine. Sometimes my energy fluctuates, but I am doing my best to remain steady and clear."*')
 
-                col_a, col_b = st.columns(2)
-                run_acoustic = col_a.button("Analyze Recorded Audio", use_container_width=True, type="primary")
-                simulate_acoustic = col_b.button("Simulate Acoustic Input (Demo)", use_container_width=True)
+                audio_tab1, audio_tab2 = st.tabs(["Option A: Live Recording", "Option B: Upload File"])
+                
+                audio_input = None
+                with audio_tab1:
+                    live_audio = st.audio_input("Click to record yourself reading the paragraph")
+                    if live_audio:
+                        audio_input = live_audio
+                with audio_tab2:
+                    uploaded_audio = st.file_uploader("Upload a pre-recorded .wav file", type=['wav'])
+                    if uploaded_audio:
+                        audio_input = uploaded_audio
 
-                if run_acoustic or simulate_acoustic:
-                    with st.spinner("Extracting Librosa MFCC biomarkers..."):
-                        t15_res = tier15_validate_audio(audio_input if run_acoustic else None)
-                    st.session_state['t15_result'] = t15_res
+                col_a, col_b = st.columns([2, 1])
+                run_acoustic = col_a.button("Analyze Recorded Audio", use_container_width=True, type="primary", disabled=(audio_input is None))
+                if col_b.button("Clear Audio Result", use_container_width=True):
+                    st.session_state.pop('t15_result', None)
+
+                if run_acoustic:
+                    if audio_input is not None:
+                        # Safely save captured audio buffer to a local temporary path for librosa
+                        temp_path = "temp_audio.wav"
+                        with open(temp_path, "wb") as f:
+                            f.write(audio_input.getbuffer())
+                    
+                        with st.spinner("Extracting real Librosa MFCC / Jitter / Shimmer biomarkers..."):
+                            t15_res = tier15_validate_audio(temp_path)
+                        
+                        # Clean up the temporary file after processing
+                        if os.path.exists("temp_audio.wav"):
+                            os.remove("temp_audio.wav")
+
+                        st.session_state['t15_result'] = t15_res
+                    else:
+                        st.warning("Please record or upload an audio file first.")
 
                 t15_res = st.session_state.get('t15_result', None)
                 if t15_res:
-                    affect_color = '#ff4b4b' if t15_res['biomarker_scores']['flat_affect'] == 'Detected' else '#3dba6f'
-                    st.markdown(f"""
-                    <p>Jitter (Voice Instability): <strong>{t15_res['biomarker_scores']['jitter']}</strong></p>
-                    <p>Shimmer Index: <strong>{t15_res['biomarker_scores']['shimmer']}</strong></p>
-                    <p>Flat Affect: <strong style="color:{affect_color};">
-                    {t15_res['biomarker_scores']['flat_affect']}</strong></p>
-                    """, unsafe_allow_html=True)
+                    if t15_res.get('error'):
+                        st.error(f"Acoustic extraction error: {t15_res['error']}")
+                    else:
+                        bs = t15_res['biomarker_scores']
+                        affect_color = '#ff4b4b' if bs['flat_affect'] == 'Detected' else '#3dba6f'
+                        st.markdown(f"""
+                        <p>Jitter (Voice Instability): <strong>{bs['jitter']}</strong></p>
+                        <p>Shimmer Index: <strong>{bs['shimmer']}</strong></p>
+                        <p>MFCC Variance Ratio: <strong>{bs.get('mfcc_variance_ratio', 'N/A')}</strong></p>
+                        <p>Flat Affect: <strong style="color:{affect_color};">
+                        {bs['flat_affect']}</strong></p>
+                        <p style="color:#7a8ab0; font-size:0.82rem;">Validation Passed: 
+                        <strong>{'✅ Yes' if t15_res['validation_passed'] else '❌ No'}</strong></p>
+                        """, unsafe_allow_html=True)
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -368,13 +401,28 @@ elif menu == "Model Metrics":
         st.subheader("Tier 1 — LightGBM DASS-42")
         if t1_model_exists:
             try:
-                m = joblib.load('models/sentin_edge_model.pkl')
-                st.markdown(f"- **Algorithm:** `{type(m).__name__}`")
-                st.markdown(f"- **Estimators:** `{m.n_estimators}`")
-                st.markdown(f"- **Class Weight:** `{m.class_weight}`")
+                # pkl is a dict: {'model': LGBMClassifier, 'feature_cols': [...], ...}
+                with open('models/sentin_edge_model.pkl', 'rb') as fh:
+                    t1_payload = pickle.load(fh)
+                if isinstance(t1_payload, dict):
+                    m1     = t1_payload['model']
+                    t1_f1  = t1_payload.get('test_f1', None)
+                    t1_n   = t1_payload.get('n_trials', 50)
+                else:
+                    # legacy bare-classifier
+                    m1     = t1_payload
+                    t1_f1  = None
+                    t1_n   = 50
+                st.markdown(f"- **Algorithm:** `{type(m1).__name__}`")
+                st.markdown(f"- **Estimators:** `{m1.n_estimators}`")
+                st.markdown(f"- **Class Weight:** `{m1.class_weight}`")
+                st.markdown(f"- **Optuna Trials:** `{t1_n}`")
                 st.markdown(f"- **Training Records:** 39,775")
-                st.markdown(f"- **Test Accuracy:** **96.04%**")
-                st.markdown(f"- **High Risk Precision:** **99%**")
+                if t1_f1 is not None:
+                    st.markdown(f"- **Test F1 (weighted):** **{t1_f1*100:.2f}%**")
+                else:
+                    st.markdown(f"- **Test Accuracy:** **96.04%**")
+                st.markdown(f"- **Features:** `{', '.join(t1_payload['feature_cols']) if isinstance(t1_payload, dict) else 'N/A'}`")
             except Exception as e:
                 st.error(f"Could not load model: {e}")
         else:
@@ -386,21 +434,27 @@ elif menu == "Model Metrics":
         st.subheader("Tier 2 — LightGBM EEG")
         if t2_model_exists:
             try:
-                with open('models/tier2_eeg_model.pkl', 'rb') as f:
-                    import pickle
-                    payload = pickle.load(f)
-                m2 = payload['model']
+                with open('models/tier2_eeg_model.pkl', 'rb') as fh:
+                    t2_payload = pickle.load(fh)
+                m2 = t2_payload['model']
+                # test_accuracy key added in new training runs; fall back to test_f1 for old pkls
+                t2_acc = t2_payload.get('test_accuracy',
+                             t2_payload.get('test_f1', None))
                 st.markdown(f"- **Algorithm:** `{type(m2).__name__}`")
                 st.markdown(f"- **Estimators:** `{m2.n_estimators}`")
                 st.markdown(f"- **Max Depth:** `{m2.max_depth}`")
-                st.markdown(f"- **Learning Rate:** `{m2.learning_rate}`")
+                st.markdown(f"- **Learning Rate:** `{m2.learning_rate:.5f}`")
+                st.markdown(f"- **Optuna Trials:** `{t2_payload.get('n_trials', 50)}`")
                 st.markdown(f"- **Training Records:** 1,148 subjects")
-                st.markdown(f"- **Test Accuracy:** **{payload['test_accuracy']*100:.1f}%**")
-                st.markdown(f"- **Features:** `{', '.join(payload['feature_cols'])}`")
+                if t2_acc is not None:
+                    st.markdown(f"- **Test F1 (weighted):** **{t2_acc*100:.2f}%**")
+                else:
+                    st.markdown("- **Test F1:** N/A — retrain to update")
+                st.markdown(f"- **Features:** `{', '.join(t2_payload['feature_cols'])}`")
             except Exception as e:
                 st.error(f"Could not load model: {e}")
         else:
-            st.error("Model not found. Run tier2_classifier.py first.")
+            st.error("Model not found. Run tier2_eeg.py first.")
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.divider()
