@@ -21,9 +21,9 @@ except ImportError:
     LIBROSA_AVAILABLE = False
 
 
-# ── Thresholds (clinically-inspired heuristics) ───────────────────────────────
-JITTER_THRESHOLD    = 1.0   # % — above this is pathological vocal instability
-SHIMMER_THRESHOLD   = 0.35  # dB — above this indicates amplitude irregularity
+# ── Thresholds (Calibrated for Laptop Microphones) ───────────────────────────────
+JITTER_THRESHOLD    = 3.5   # % — Raised from 1.0% due to consumer mic noise floor
+SHIMMER_THRESHOLD   = 8.5  # dB — Raised from 0.35dB to account for laptop static
 FLAT_AFFECT_THRESHOLD = 0.15  # MFCC variance ratio — below this is flat affect
 
 
@@ -121,6 +121,13 @@ def tier15_validate_audio(audio_path: str | None) -> dict:
     try:
         # ── 1. Load audio (mono, native sample rate) ─────────────────────────
         y, sr = librosa.load(audio_path, sr=None, mono=True)
+
+        # ── 1.5. Apply Spectral Gating (Noise Reduction) ─────────────────────────
+        try:
+            import noisereduce as nr
+            y = nr.reduce_noise(y=y, sr=sr)
+        except ImportError:
+            pass # Graceful fallback if not installed
 
         # ── 2. MFCC extraction (13 coefficients) ─────────────────────────────
         mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)  # shape: (13, T)
